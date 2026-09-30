@@ -1,0 +1,500 @@
+# N64Recomp configuration for Wetrix.
+#
+# The ELF referenced here comes from the wetrix-n64-disassembly repository,
+# which owns the ROM map: that is where it is derived from the ROM (its tools/
+# build_elf.py) and verified byte-for-byte identical to it (its tools/
+# verify_elf.py). That matters for this file specifically: N64Recomp takes the
+# instruction bytes out of the image named below and uses the ELF only as a
+# metadata map, so the function boundaries and symbol addresses it reads have to
+# be the real ones. They are.
+#
+# rom_file_path is the port's provisioned image rather than the ROM you own.
+# wetrix.z64 is that ROM in flat big-endian order, which is the only form
+# N64Recomp reads instruction bytes out of, and provisioning produces it once
+# from whatever dump you have. See README.md.
+#
+# Regenerating needs no Docker and nothing else to download: both tools come
+# from the N64Recomp submodule of the runtime checkout that is already here, and
+# they reproduce the current build/recomp byte for byte.
+#
+#   cmake -S build/n64modernruntime/N64Recomp -B build/n64recomp-build -G Ninja
+#   cmake --build build/n64recomp-build --parallel
+#   ./build/n64recomp-build/N64Recomp.exe wetrix.toml
+#
+# (The same build also produces RSPRecomp.exe, which the audio microcode needs.)
+
+[input]
+# Read out of the ROM's own entrypoint code, and matches symbol_addrs.txt.
+entrypoint = 0x80000400
+
+rom_file_path = "wetrix.z64"  # the provisioned image; see README.md
+elf_path = "build/wetrix.elf"
+output_func_path = "build/recomp"
+
+# 800 game functions at one file each is unwieldy; group them.
+functions_per_output_file = 32
+
+# Emits TRACE_ENTRY()/TRACE_RETURN() into every recompiled function, and adds
+# `#include "trace.h"` to funcs.h. The macros and the storage are the port's:
+# include/trace.h and src/trace.cpp.
+#
+# On, because the hang past the title screen is a spin, and a spin has no stack
+# to resolve -- the only way to learn how the game got into the loop is to record
+# the calls on the way in. The trace is inert unless something dumps it, which is
+# the stall probe. It costs a store per call, so it can be turned off once this
+# bug is understood, and probably should be before shipping.
+trace_mode = true
+
+# Printed verbatim at the top of the generated funcs.h. N64Recomp declares the
+# functions it recompiles and the ones on its built-in "reimplemented" list, but
+# not the rest -- so the port has to declare those itself, and this is the hook
+# for it. See include/wetrix_shims.h.
+#
+# Without this the calls still compile under GCC <= 13 (the Linux build), where
+# an undeclared call is only a warning. GCC 14 made it an error by default, so
+# the Windows build caught it first.
+recomp_include = "#include \"recomp.h\"\n#include \"wetrix_shims.h\""
+
+# Jump-table entry points that are not function boundaries in the splat split.
+#
+# The game dispatches on command bytes through function-pointer tables (for
+# example D_8007AC80, the sequence-player table indexed by `byte & 0x7F`). Some
+# of those table words point *inside* a function that splat emitted, because
+# spimdisasm could not see the indirect call and only split at `jal` targets.
+# N64Recomp emits one callable function per ELF function, so at runtime
+# `lookup_function()` aborts with "Failed to find function at 0x..." the first
+# time one of these handlers runs.
+#
+# `manual_funcs` is N64Recomp's own escape hatch for exactly this: it recompiles
+# an extra function starting at `vram` with `size` bytes, independently of the
+# ELF boundaries (a duplicate body is harmless). Each address below was found by
+# scanning the data segments for `.word` values that point into `.main` and are
+# not a known function start; each size runs to the next real boundary so the
+# copied body keeps its own `jr ra`.
+manual_funcs = [
+    # D_8007AC80, the sequence-player command table (indexed by `byte & 0x7F`),
+    # and the handful of other dispatch tables that a frame of audio and the
+    # screen setup reach. Every address here was confirmed against this map:
+    # each one sits inside the function named at the end of its line, and its
+    # size runs to that function's end. tools/find_jump_table_entries.py in the
+    # disassembly repo reports every data word that points into code without
+    # being a function start -- a superset of this list, since not every such
+    # word is dispatched -- so the next "Failed to find function at 0x..." is
+    # answered by adding the address it names.
+    { name = "func_8004B940", section = ".main", vram = 0x8004B940, size = 0x13C },  # inside func_8004B938
+    { name = "func_8004E4D4", section = ".main", vram = 0x8004E4D4, size = 0x18 },  # inside func_8004E494
+    { name = "func_8004E4E4", section = ".main", vram = 0x8004E4E4, size = 0x8 },  # inside func_8004E494
+    { name = "func_8004E534", section = ".main", vram = 0x8004E534, size = 0x9C },  # inside func_8004E524
+    { name = "func_8004E544", section = ".main", vram = 0x8004E544, size = 0x8C },  # inside func_8004E524
+    { name = "func_8004E554", section = ".main", vram = 0x8004E554, size = 0x7C },  # inside func_8004E524
+    { name = "func_8004E738", section = ".main", vram = 0x8004E738, size = 0x6C },  # inside func_8004E734
+    { name = "func_8004E760", section = ".main", vram = 0x8004E760, size = 0x44 },  # inside func_8004E734
+    { name = "func_8004E76C", section = ".main", vram = 0x8004E76C, size = 0x38 },  # inside func_8004E734
+    { name = "func_8004E77C", section = ".main", vram = 0x8004E77C, size = 0x28 },  # inside func_8004E734
+    { name = "func_8004E788", section = ".main", vram = 0x8004E788, size = 0x1C },  # inside func_8004E734
+    { name = "func_8004E79C", section = ".main", vram = 0x8004E79C, size = 0x8 },  # inside func_8004E734
+    { name = "func_8004E7B0", section = ".main", vram = 0x8004E7B0, size = 0x4 },  # inside func_8004E7A4
+    { name = "func_8004E7B8", section = ".main", vram = 0x8004E7B8, size = 0x50 },  # inside func_8004E7B4
+    { name = "func_8004E7E0", section = ".main", vram = 0x8004E7E0, size = 0x28 },  # inside func_8004E7B4
+    { name = "func_8004E8C8", section = ".main", vram = 0x8004E8C8, size = 0xCC },  # inside func_8004E8C0
+    { name = "func_8004E91C", section = ".main", vram = 0x8004E91C, size = 0x78 },  # inside func_8004E8C0
+    { name = "func_8004E980", section = ".main", vram = 0x8004E980, size = 0x14 },  # inside func_8004E8C0
+]
+
+# Function size overrides, both generated by tools/find_branch_escapes.py.
+#
+# N64Recomp recompiles one function at a time and can only emit a branch that
+# stays inside the function or lands exactly on another function's start (which
+# it turns into a tail call). Anything else is a hard error or a goto to a
+# label that does not exist.
+#
+# 63 branches in this ROM leave their own function, because gcc cross-jumps
+# identical code tails: a function ends by branching forward into the epilogue
+# of the *next* function instead of duplicating those instructions. Widening the
+# branching function so the shared tail falls inside it recompiles the tail
+# twice, which is exactly the duplication the original compiler declined to do.
+#
+# The sizes below are the 52 functions where the branch target lies forward of
+# the function; each was computed as "extend to the end of the function that
+# owns the target" so the duplicated tail stays whole.
+#
+# Regenerate these against the current ELF rather than trusting them: a size
+# depends on where the map puts the neighbouring boundaries, so changing the
+# split invalidates the list.
+#
+# NOT included, and still open: 5 function pairs branch into *each other*
+# (func_8004C754, func_80050B84, func_80059840, func_8005CC50, func_8005D160).
+# Widening only grows a function forward, so it cannot fix a backward branch,
+# and 4 of those 5 are genuinely reached by `jal` -- two real entry points
+# sharing one mutually recursive body. That is the "static function" case
+# N64Recomp itself flags as a FIXME, and it needs a decision rather than a
+# size override.
+# No widenings are needed now. This list held 52 entries, each extending a
+# function so that a target inside its body was contained, because N64Recomp
+# recompiles one function at a time and a branch that leaves its function has
+# nowhere to go. The entries were an artefact of the map rather than of the
+# code: it cut libultra's exception and thread machinery into fragments, and a
+# fragment that is really the tail of its neighbour makes that neighbour's
+# branches look like they escape. With those boundaries repaired the ROM
+# recompiles with no overrides at all. Re-measure before adding one back.
+function_sizes = [
+    # The game's random-number function. rand() enters at func_8003BD30, which loads
+    # a flag (D_80065988) and then FALLS THROUGH into func_8003BD38, the generator
+    # itself; splat split it there, so the ELF says BD30 is 8 bytes. Recompiled as
+    # given, BD30 ends after the load and every caller gets that flag (0) back
+    # instead of a random number: every random pick was 0, so all the rain fell on
+    # one cell. Widened to 0x8003BD30..0x8003BDC4 so the body is whole again.
+    # (func_8003BD38 is still called directly by two sites, so it stays a function.)
+    { name = "func_8003BD30", size = 0x94 },
+    { name = "__osExceptionPreamble", size = 0x72C },
+    { name = "func_8001126C", size = 0x410 },
+    { name = "func_8001BD90", size = 0x294 },
+    { name = "func_80031DAC", size = 0x108 },
+    { name = "func_80039438", size = 0xCC },
+    { name = "func_8004C694", size = 0x124 },
+    { name = "func_8004E9E0", size = 0x464 },
+    { name = "func_8004F510", size = 0x190 },
+    { name = "func_8004F6A0", size = 0xC8 },
+    { name = "func_8004FA00", size = 0xEC },
+    { name = "func_80051060", size = 0xEC },  # was 0x20, now 0x80051060..0x8005114C,
+    { name = "func_80053560", size = 0x23C },
+    { name = "func_8005379C", size = 0x3A8 },
+    { name = "func_80054950", size = 0x4B4 },
+    { name = "func_80056920", size = 0x300 },
+    { name = "func_80056F50", size = 0x47C },
+    { name = "func_80057B30", size = 0x154 },
+    { name = "func_80057C90", size = 0x12C },
+    { name = "func_80059350", size = 0x5BC },
+    { name = "func_80059960", size = 0x70 },
+    { name = "func_80059B20", size = 0x74 },
+    { name = "func_80059BA0", size = 0x158 },
+    { name = "func_80059D60", size = 0x1B4 },
+    { name = "func_8005A1E0", size = 0x2F4 },
+    # The ROM's osCreateScheduler, split in two by splat at 0x8005AA40 because the
+    # ROM `jal`s that label (from func_8001BA10, a dead copy of the same setup
+    # code). With the split in place the generated C ran off the end of the first
+    # half and returned, so the second half never ran -- and the second half is
+    # the whole scheduler: it creates two mesg queues, calls osCreateViManager,
+    # registers the SP, DP and PRENMI events with osSetEventMesg, registers VI
+    # with osViSetEvent, and starts the ROM's own scheduler thread (id 4, priority
+    # 127) at 0x8005A704. Nothing then posted to the scheduler's client queue, the
+    # game's logic thread waited on it forever, and the port sat at a black screen
+    # with every thread parked and no crash to point at. This map calls the first
+    # half func_8005AA10 rather than osCreateScheduler, because the name is not in
+    # N64Recomp's vocabulary and so buys nothing -- but it is the same function,
+    # and absorbing the second half (func_8005AA40, 0xFC bytes) makes
+    # 0x8005AA10..0x8005AB3C whole again.
+    { name = "func_8005AA10", size = 0x12C },  # was 0x30, now 0x8005AA10..0x8005AB3C
+    { name = "func_8005AFD0", size = 0x110 },
+    { name = "func_8005BAF4", size = 0x378 },
+    { name = "func_8005BF30", size = 0x150 },
+    { name = "func_8005C0D0", size = 0x180 },
+    { name = "func_8005C250", size = 0x5C },
+    { name = "func_8005C390", size = 0x118 },
+    { name = "func_8005C610", size = 0xC4 },
+    { name = "func_8005C6E0", size = 0xA4 },
+    { name = "func_8005C7A0", size = 0xA4 },
+    { name = "func_8005C850", size = 0xCC },
+    { name = "func_8005CBC8", size = 0x298 },
+    { name = "func_8005DE44", size = 0x298 },
+    { name = "func_8005E6E0", size = 0x3C },
+    { name = "func_8005F290", size = 0xA4 },
+    { name = "func_8005F490", size = 0x11C },
+    { name = "func_80060A14", size = 0x74 },
+    { name = "func_800619B0", size = 0x680 },
+    { name = "func_800635A0", size = 0x6C },
+    { name = "func_800636C0", size = 0x63C },
+]
+
+[patches]
+# The ROM's own `main` is recompiled as a real function, so it collides with the
+# host C++ entry point at link time. `renamed` appends `_recomp` to the symbol
+# while still recompiling the body, which is the same treatment N64Recomp gives
+# libc (strlen, sprintf) for the same reason. Nothing else needs to change: the
+# boot code that calls `main` gets redirected to the new name automatically.
+renamed = ["main"]
+
+
+# GCC cross-jumps identical code tails, so func_8005C250 branches into the
+# middle of func_8005C280's copy loop rather than duplicating it. N64Recomp
+# recompiles whole functions and cannot emit a branch into another function's
+# interior, so it fails on this one. Nothing jal's func_8005C250, so stubbing
+# it is safe while the boundary is investigated properly.
+# `ignored` rather than `stubs`.
+#
+# Both make N64Recomp skip the body, but they differ in what the port can do
+# about it. A stub emits an *empty function*, so a call into one returns having
+# done nothing and says nothing about it -- there is no way to even observe that
+# it ran. An ignored function is not emitted at all, and the port defines the
+# symbol itself, which means a call into one reaches our code. These 14 are
+# therefore declared in include/wetrix_shims.h and defined in
+# src/replaced_funcs.cpp.
+#
+# The reason to prefer that is not style. One of these functions was suspected of
+# causing the freeze past the title screen, and a silent empty body could not
+# confirm or deny it -- so the suspect is now a function that reports the first
+# entry into itself, and the answer came back immediately: none of them is
+# reached before the freeze. The freeze turned out to be a thread-handoff problem
+# (see the last entry in this list), and having these observable rather than
+# silently empty is what ruled them out instead of leaving them as a standing
+# suspicion.
+#
+# The trade is that the port now *must* define all 14, or the link fails. That is
+# the point: an omission is a build error instead of a silent no-op.
+ignored = [
+    "func_8005C250",
+
+    # ---- R4300 hardware layer with no host equivalent ----
+    #
+    # N64Recomp models only COP0 Status (register 12). Everything else -- the
+    # exception machinery (Cause / EPC / ErrorEPC) and the TLB (EntryHi /
+    # EntryLo / PageMask / tlbwi) -- is R4300 hardware that simply does not
+    # exist in recompiled host code, and these functions exist solely to drive
+    # it. Stubbing them is the semantically correct move, not a workaround:
+    #   * the exception vector is installed at 0x80000180 and the handler at
+    #     func_8001126C reads Cause and dispatches through a table. Nothing can
+    #     raise an N64 exception on the host, so this is unreachable.
+    #   * func_8001167C dumps the GPRs and every COP0 register.
+    #   * the TLB routines map ROM segments that are flat memory on the host.
+    # A complete set, measured rather than guessed: these 7 functions hold 61
+    # of the non-Status COP0 instructions objdump finds inside recompiled
+    # functions -- 33 of them in the register dump alone, 7 in each TLB routine.
+    #
+    # Two candidates from the first pass are deliberately NOT here:
+    #   * func_80050E2C is STT_NOTYPE with size 0 in the ELF, so N64Recomp
+    #     never treats it as a function and stubbing it is a hard error.
+    #   * __osCleanupThread is in N64Recomp's built-in reimplemented list, so
+    #     its ROM body is never recompiled and its epc write never appears.
+    "func_80011100",
+    "func_8001126C",
+    "func_800115B8",
+    "func_8001167C",
+    "func_80052EC0",
+    "func_80061200",
+    "func_80061330",
+
+    # ---- hand-written assembly with multiple entry points (OPEN ISSUE) ----
+    #
+    # These 5 are the second entry of a pair of functions that branch into each
+    # other. Widening only grows a function forward, so a backward branch cannot
+    # be repaired with a size override, and 4 of the 5 are genuinely reached by
+    # `jal`. The cause is visible in the code: func_80050B84, for instance, is
+    # libultra assembly, not compiler output -- its neighbours end in
+    # `j __osDispatchThread`, they use k0/k1 directly, and one of them reads
+    # `mfc0 t2, c0_badvaddr`. Those are several real entry points sharing one
+    # body, which N64Recomp's one-function-at-a-time model cannot express (its
+    # own source comment: "FIXME: how to deal with static functions?").
+    #
+    # Ignoring them lets the recompiler finish and keeps the widened partner
+    # function intact -- the shared code is still emitted, as part of the
+    # partner. What is lost is the ability to *call* the short entry: a `jal`
+    # into 0x80050B84 now reaches the port's implementation instead, which is
+    # currently a no-op that logs. These 5 need a real decision (block-level
+    # call support, or hand-writing the tail in C), not a config line.
+    #
+    # Measured call sites in asm/ -- the reason these five are the ones that
+    # matter and the other eight are not:
+    #   func_80050B84  14   func_8004C754   1   func_80059840   1
+    #   func_8005CC50   1   func_8005D160   0
+    "func_8004C754",
+    "func_80050B84",
+    "func_80059840",
+    "func_8005CC50",
+    "func_8005D160",
+
+    # ---- the wait primitive every sound-drain loop spins on ----
+    #
+    # Unlike everything above, this is not a hole in the recompilation. The ROM's
+    # body recompiles fine; the port replaces it to add the one thing the host
+    # needs and the hardware provided for free: a handoff.
+    #
+    # The ROM has nine places shaped like this, and every one of them spins on
+    # this function:
+    #
+    #     func_8004C120(mode, 0)                  # stamp the records to release
+    #     while (func_8004C1A0(mode) != 0) { }    # wait for the release to land
+    #
+    # func_8004C1A0(mode) walks the 20-voice pool at 0x801774B0 (count at
+    # 0x80080BA4, base at 0x80080BAC, stride 0x130) and counts the records that
+    # match: mode 1 counts voices that are playing, mode 2 counts voices that are
+    # bound to a sample but idle.
+    #
+    # The release runs in the audio thread. func_8004C120 leaves a countdown in
+    # word[0xC] of each record it stamps, and func_8004C818 -- the alSyn player
+    # callback, reached from alAudioFrame on the thread Thread_8004F050 runs --
+    # decrements it and frees the record when it passes zero. On hardware that
+    # takes one audio frame, because the audio thread is runnable there and
+    # preempts. In the port it never happens at all: N64ModernRuntime's threads
+    # are cooperative (scheduling.cpp hands off only from yield_self, pause_self
+    # and the blocking message paths, and it will not hand off to a thread that
+    # is not strictly higher priority), so a thread that spins parks the entire
+    # emulated machine -- audio, scheduler, the missing-message pump and all.
+    #
+    # Measured, not inferred. Two call sites were captured with the stall probe:
+    # entering a game mode (func_8002525C, mode 2, 16 idle-bound records) and the
+    # language option in the options menu (func_800252C8, mode 1, 2 playing
+    # records). In both, the display-list counter and the audio stopped in the
+    # same second, and the loop reached 118 million iterations with the count
+    # frozen and the retry counter climbing.
+    #
+    # The port's version is the ROM's scan, transcribed from asm/12580.s, plus a
+    # short timed handoff whenever the count is nonzero -- which is exactly when
+    # the caller is about to loop, so nothing else pays for it. See group 4 in
+    # src/replaced_funcs.cpp.
+    "func_8004C1A0",
+]
+
+# Branch redirections. tools/find_branch_escapes.py finds these and prints the
+# replacement word for each (`REDIRECT` lines).
+#
+# Both are the same shape: a branch whose target is a delay-slot nop that follows
+# another function's `jr ra`. Widening cannot repair it, because N64Recomp
+# models a delay slot as part of its branch, so a goto into one has no label to
+# land on. But the nop does nothing and execution falls straight through into the
+# next function, so branching to the nop is equivalent to branching to that
+# function's start -- which N64Recomp does support, as a tail call. Redirecting
+# the branch keeps the semantics and removes the unreachable label.
+
+# func_8005BF30 -> 0x8005BFDC was the delay slot of osSpTaskYield's `jr ra`,
+# falling through into func_8005BFE0.
+[[patches.instruction]]
+vram = 0x8005BF30
+func = "func_8005BF30"
+value = 0x1621002B
+
+# func_80051510 -> 0x80051578 was the delay slot of __osRestoreInt's `jr ra`,
+# falling through into func_80051580.
+[[patches.instruction]]
+vram = 0x80051538
+func = "func_80051510"
+value = 0x10000011
+
+
+# The boot thread's halt guard. recomp_entrypoint ends with `break 1, 2` after
+# its `jal main`, and on hardware that break is unreachable: libultra's
+# osStartThread switches to the thread it just started, so `main` never returns.
+#
+# N64ModernRuntime models threads as native host threads instead. osStartThread
+# on the boot thread (thread_self == nullptr, which is the case here because
+# recomp::start calls the entrypoint directly) resumes the new thread and
+# RETURNS, so `main` does return -- and the break, a hardware halt guard with no
+# meaning on the host, reaches do_break(), which printf's and exits(). That exit
+# is the "Encountered break at original vram 0x80000438" crash.
+#
+# Nop'ing it lets the entrypoint return normally. recomp::start's game-start
+# thread then finishes its wait_for_game_started() loop and ends (it is only a
+# launcher), while the ROM's own game thread, already running on its own native
+# thread, keeps going. No runtime change is needed; the guard itself is the only
+# thing that assumes the hardware scheduler.
+[[patches.instruction]]
+vram = 0x80000438
+func = "recomp_entrypoint"
+value = 0
+
+
+# The MIPS III CACHE opcode. N64Recomp has no handler for it, but there is no
+# R4300 data cache in recompiled host code, so every one of these is
+# semantically a no-op -- patching the word to 0 nops it out.
+#
+# These 11 are the complete set. splat decodes `cache` explicitly, so they can
+# be counted exactly rather than guessed at: the 11 mnemonics in asm/ match the
+# 11 that objdump finds inside named functions in the ELF. Float constants like
+# -1.0f (0xBF800000) share the opcode and are why a blind byte scan is not
+# sufficient -- they live in D_* data, not in func_* bodies.
+[[patches.instruction]]
+vram = 0x80011224
+func = "func_8001121C"
+value = 0
+
+[[patches.instruction]]
+vram = 0x80011240
+func = "func_80011238"
+value = 0
+
+[[patches.instruction]]
+vram = 0x800515BC
+func = "func_80051580"
+value = 0
+
+[[patches.instruction]]
+vram = 0x800515E0
+func = "func_80051580"
+value = 0
+
+[[patches.instruction]]
+vram = 0x800515F0
+func = "func_80051580"
+value = 0
+
+[[patches.instruction]]
+vram = 0x80051614
+func = "func_80051580"
+value = 0
+
+[[patches.instruction]]
+vram = 0x80051678
+func = "func_80051640"
+value = 0
+
+[[patches.instruction]]
+vram = 0x8005169C
+func = "func_80051640"
+value = 0
+
+[[patches.instruction]]
+vram = 0x80061938
+func = "func_80061900"
+value = 0
+
+[[patches.instruction]]
+vram = 0x8006195C
+func = "func_80061900"
+value = 0
+
+[[patches.instruction]]
+vram = 0x80061990
+func = "func_80061980"
+value = 0
+
+# The two COP0 sites left over from the stub list above, both in functions that
+# are genuinely called and so must keep their structure.
+#
+# func_80051140 is osGetCount(): one `mfc0 v0, c0_count` then return. The R4300
+# COUNT register is the CPU cycle counter, so there is nothing honest to read
+# here -- this needs a runtime-provided tick before timing-sensitive code is
+# correct. Returning 0 is a placeholder, NOT a fix: anything that waits on this
+# value to advance will hang, and anything seeding an RNG from it becomes
+# deterministic. The `mfc0` is replaced in place with `addiu v0, zero, 0`
+# (0x24020000) so the instruction count and therefore every downstream address is
+# unchanged, and the hook below then puts the real counter in v0 just before the
+# return. (func_8003BDE4 mixes osGetTime, which reads this, into what looks like an
+# RNG seed; with the frozen value the rain clumped in one spot.)
+[[patches.instruction]]
+vram = 0x80051140
+func = "func_80051140"
+value = 0x24020000
+
+[[patches.hook]]
+func = "func_80051140"
+before_vram = 0x80051144      # the `jr ra`; the delay slot is a nop
+text = "ctx->r2 = (int32_t)wetrix_count_now();"
+
+# The same instruction again, because widening func_80051060 to 0xEC bytes makes
+# it overlap osGetCount's body -- the widening exists to contain a branch out of
+# func_80051060 that lands inside osGetTime, and it necessarily swallows the
+# delay slot of the `jal` at 0x8005113C, which is osGetCount's first instruction.
+# Instruction patches are keyed by function name, so an instruction inside two
+# recompiled ranges has to be patched once for each. Every widening therefore has
+# to be re-checked against the patch list above.
+[[patches.instruction]]
+vram = 0x80051140
+func = "func_80051060"
+value = 0x24020000
+
+
+# __osSetCompare is deliberately NOT patched. It is in N64Recomp's built-in
+# reimplemented list, so its ROM body is never recompiled and the runtime
+# supplies the host equivalent -- the same is true of __osGetSR, __osSetSR,
+# __osRestoreInt and __osDispatchThread. That is why the c0_sr accesses we
+# counted looked like they were "already supported": they were never handed to
+# the recompiler in the first place.

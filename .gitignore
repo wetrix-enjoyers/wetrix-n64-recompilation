@@ -1,0 +1,30 @@
+# Anything derived from the ROM stays out of the repository: the ROM itself in
+# any of its dump layouts, the game image adopted from it, and every build
+# artefact. A clone plus a legally obtained ROM is enough to rebuild all of it --
+# nothing ignored here is a source of truth.
+*.z64
+*.n64
+*.v64
+*.rom
+
+# Everything generated: the dependency checkouts, the recompiled C and audio
+# microcode, the ELF copied in from the disassembly project, and the exe.
+/build/
+
+# Repositories cloned by tools/deps.py when they are not next to this one.
+/deps/
+
+# Python
+__pycache__/
+venv/
+.venv/
+
+# librecomp's mod framework writes these beside the exe, and renames the old copy
+# before rewriting it. Not worth committing.
+/mods/
+/mod_config/
+/saves/
+/mods.json
+/mods.json.bak
+
+.vscode/

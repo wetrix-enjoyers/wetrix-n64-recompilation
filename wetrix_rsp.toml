@@ -1,0 +1,66 @@
+# RSPRecomp config for Wetrix's audio microcode.
+#
+# The ROM loads one contiguous blob from 0xEA40 (splat asset `gfx_ucode`, size
+# 0x2380, ending where the next asset at 0x10DC0 begins) into RDRAM 0x8000DE40:
+#
+#   RDRAM 0x8000DE40   boot microcode        (task->t.ucode_boot)
+#   RDRAM 0x8000F380   audio microcode text  (task->t.ucode)
+#
+# so the text is blob offset 0x1540 -> ROM 0xFF80, and it runs 0xEA8 bytes, up to
+# and including the `nop` in the delay slot of its final `jr $ra`. The next word
+# after it is `lui $2, 0xA460` -- the start of a PI/DP MMIO access, i.e. data
+# belonging to whatever follows, so the text ends exactly there. Splat's next
+# asset boundary (0x10DC0) is 0x68 bytes early for this blob; it only ever named
+# a segment, so it does not affect the ELF, which still reassembles
+# byte-for-byte. The loaded copy in RDRAM is word-swapped relative to the ROM
+# (verified byte-for-byte), and RSPRecomp reads the ROM as big-endian words, so
+# pointing it straight at the ROM reproduces the exact instruction stream the
+# RSP executes.
+#
+# text_address is the IMEM address the text runs at, and it has to be the real
+# one: RSPRecomp labels each instruction with `text_address + 4*i` and masks
+# jump targets to 12 bits, so a wrong base shifts every absolute `j`/`jal` by the
+# difference. The boot microcode proves the base -- it loads the text with
+#
+#   addi $7, $zero, 0x1080     # IMEM 0x1080, i.e. the upper 0xF80 bytes of IMEM
+#   mtc0 $7, SP_MEM_ADDR
+#   mtc0 $2, SP_DRAM_ADDR      # $2 = task->ucode
+#   mtc0 $3, SP_RD_LEN         # $3 = 0xF7F
+#   ...
+#   jr   $7                    # enter the text at 0x1080
+#
+# (ROM 0xEA40, the task's `ucode_boot`.) Against base 0x1000 the text runs but
+# never advances: every `j 0x1118` -- the handlers' "next command" exit -- landed
+# on what the 0x1080 base calls 0x1198, a DMA tail, whose `jr $ra` returned to
+# the entry sequence and re-dispatched the same command forever. Against 0x1080
+# they land on the loop's `bgtz $30, <dispatch>`, the DMA helpers become real
+# subroutines, and the count-down that ends in `mtc0 $1, SP_STATUS; break`
+# terminates the task.
+rom_file_path = "wetrix.z64"  # the provisioned image; see README.md
+text_offset = 0xFF80
+text_size = 0xEA8
+text_address = 0x1080
+output_file_path = "build/rsp/aspMain.cpp"
+output_function_name = "aspMain"
+
+# The microcode dispatches audio commands through a table of 16-bit jump
+# targets:
+#
+#   srl $1, $26, 23      # $26 = the command word
+#   andi $1, $1, 0xFE    # 16-bit entries, so an even byte offset
+#   lh $2, 0x10($1)      # the table lives at DMEM 0x10 in the ucode data
+#   jr $2
+#
+# Those targets are data, not code, so nothing in the instruction stream
+# mentions them and RSPRecomp cannot discover them. Recovered from the ROM's
+# copy of the microcode data by reproducing the halfword read exactly (see
+# tools/find_ucode_targets.py), keeping only values that are instruction
+# addresses inside the text. The table's tail holds unrelated audio tables,
+# whose values land outside the text and are filtered out; two entries (0x1000
+# and 0x2000) are below/above the text, so they are filtered too and would show
+# up at runtime as an unhandled target rather than a compile error.
+extra_indirect_branch_targets = [
+    0x10B4, 0x1118, 0x11DC, 0x11F0, 0x1214, 0x1254, 0x1294, 0x12D0,
+    0x12EC, 0x1328, 0x1338, 0x138C, 0x140C, 0x144C, 0x1470, 0x148C, 0x170C,
+    0x187C, 0x1B38, 0x1E24,
+]
