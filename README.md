@@ -115,8 +115,7 @@ On launch the executable checks that image (one read, one hash). If it is missin
 or wrong, it searches beside itself, in `data/`, and up to four directories up.
 Every `*.z64`, `*.n64` and `*.v64` it finds is a candidate, and a rejected one gets
 a reason (length, internal name, or hash). A match is normalised to big-endian and
-becomes `wetrix.z64`: a `.z64` is moved; an `.n64`/`.v64` is rewritten beside the
-original, which is left in place. The same code (`src/rom_adopt.c`) backs
+is written out as `wetrix.z64`; the original is never moved or changed. The same code (`src/rom_adopt.c`) backs
 `tools/provision_rom.c`.
 
 ```

@@ -21,10 +21,10 @@ extern "C" {
  * directories are scanned for *.z64, *.n64 and *.v64 files of the right size.
  * Each candidate is byte-order normalised if needed, checked against the ROM
  * this port was recompiled from (internal name and XXH3 hash), and the first
- * match is moved into place -- renamed when its bytes are already what is
- * wanted, written out when they were reversed.
+ * match is written to the port's own name (as it is when already big-endian, byte
+ * order fixed when reversed).
  *
- * Nothing is deleted: a dump that gets rewritten stays where the player put it.
+ * The player's dump is never moved or deleted: it stays where they put it.
  *
  * `prefix` is printed in front of every message, so the exe can keep its
  * "[wetrix] " convention and the tool can print plainly.

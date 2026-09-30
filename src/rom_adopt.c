@@ -20,13 +20,12 @@
  *     shape a folder gets handed around in, since nothing ROM-derived is
  *     committed and the ROM is the one part that cannot be shipped.
  *
- * What it will not do is remove the player's dump. A dump that is already
- * big-endian is *moved* -- rename, same bytes, so their file simply changes name
- * and is the file the port reads from then on. A byte-reversed one is rewritten
- * as big-endian beside its original, which is left exactly where it was, because
- * a file this code rewrites is a file it can get wrong. The one removal in here
- * is a file already sitting under the port's own name that has been read and is
- * not this ROM; the adopted file cannot take that name otherwise.
+ * What it will not do is remove or move the player's dump. The ROM is written to
+ * the port's own name as big-endian -- copied as it is when it already is, byte
+ * order fixed when it was reversed -- and the original is left exactly where it
+ * was. The one removal in here is a file already sitting under the port's own
+ * name that has been read and is not this ROM; the adopted file cannot take that
+ * name otherwise.
  *
  * Every *.z64, *.n64 and *.v64 in the searched folders is a candidate, whatever
  * its size: the whole point is to say what is wrong with the file you actually
@@ -397,14 +396,12 @@ int wetrix_rom_adopt(const char* target_dir, const char* explicit_source, const 
         /* Report the byte order rather than accepting whatever it is: a wrong
          * guess here produces a file that looks fine and boots into garbage. */
         enum byte_order order = detect_byte_order(data, size);
-        int needs_rewrite = 0;
         switch (order) {
             case ORDER_BIG_ENDIAN:
                 break;
             case ORDER_SWAPPED_4:
             case ORDER_SWAPPED_2:
                 normalise(data, size, order);
-                needs_rewrite = 1;
                 break;
             case ORDER_INVALID:
                 log_note("skipping %s: it does not start with an N64 header", candidates[i].path);
@@ -432,18 +429,6 @@ int wetrix_rom_adopt(const char* target_dir, const char* explicit_source, const 
                 free(data);
                 return 1;
             }
-        }
-
-        if (!needs_rewrite) {
-            /* Rename, not copy: same bytes, different name, so the ROM the
-             * player already has becomes the file the port reads. */
-            if (rename(candidates[i].path, rom_path) == 0) {
-                log_note("moved %s to %s", candidates[i].path, rom_path);
-                free(data);
-                return 0;
-            }
-            log_note("%s could not be moved (%s); writing it instead", candidates[i].path,
-                     strerror(errno));
         }
 
         FILE* out = fopen(rom_path, "wb");
@@ -476,13 +461,8 @@ int wetrix_rom_adopt(const char* target_dir, const char* explicit_source, const 
             return 1;
         }
 
-        if (needs_rewrite) {
-            log_note("wrote %s; %s is untouched and stays where it is",
-                     rom_path, candidates[i].path);
-        }
-        else {
-            log_note("wrote %s from %s", rom_path, candidates[i].path);
-        }
+        log_note("wrote %s from %s; %s is untouched and stays where it is", rom_path,
+                 candidates[i].path, candidates[i].path);
         return 0;
     }
 
